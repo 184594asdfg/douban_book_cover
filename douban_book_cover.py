@@ -644,13 +644,14 @@ class DoubanBookCover:
     
     def verify_image_url(self, url):
         """
-        验证图片URL是否有效
+        验证图片URL是否可访问
         """
         if not url:
             return False
         
         try:
-            response = self.session.head(url, timeout=10)
+            # 使用GET请求而不是HEAD，因为有些服务器对HEAD请求有限制
+            response = self.session.get(url, timeout=10, stream=True)
             return response.status_code == 200
         except:
             return False
@@ -663,25 +664,87 @@ class DoubanBookCover:
             print(f"无效的图片URL: {url}")
             return False
         
-        # 验证URL是否有效
-        if not self.verify_image_url(url):
-            print(f"图片URL无效或无法访问: {url}")
-            return False
+        # 增强请求头以应对反爬虫
+        enhanced_headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Referer': 'https://book.douban.com/',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
         
         try:
-            response = self.session.get(url, timeout=30)
-            response.raise_for_status()
+            # 使用增强的请求头
+            response = self.session.get(url, timeout=30, headers=enhanced_headers)
             
-            with open(filename, 'wb') as f:
-                f.write(response.content)
-            
-            print(f"封面已保存: {filename}")
-            return True
+            if response.status_code == 200:
+                with open(filename, 'wb') as f:
+                    f.write(response.content)
+                print(f"封面已保存: {filename}")
+                return True
+            else:
+                print(f"下载封面失败，状态码: {response.status_code}")
+                
+                # 如果是反爬虫错误，尝试备用方案
+                if response.status_code == 418:
+                    print("检测到反爬虫机制，尝试备用下载方法...")
+                    return self._download_with_alternative_method(url, filename)
+                
+                return False
             
         except requests.RequestException as e:
             print(f"下载封面失败: {e}")
             return False
-    
+
+    def _download_with_alternative_method(self, url, filename):
+        """
+        备用下载方法：尝试使用不同的策略绕过反爬虫
+        """
+        import time
+        import random
+        
+        # 策略1：添加延迟后重试
+        print("策略1: 添加随机延迟后重试...")
+        time.sleep(random.uniform(2, 5))
+        
+        # 使用不同的User-Agent
+        alternative_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Referer': 'https://book.douban.com/',
+            'Sec-Fetch-Dest': 'image',
+            'Sec-Fetch-Mode': 'no-cors',
+            'Sec-Fetch-Site': 'cross-site'
+        }
+        
+        try:
+            response = self.session.get(url, timeout=30, headers=alternative_headers)
+            if response.status_code == 200:
+                with open(filename, 'wb') as f:
+                    f.write(response.content)
+                print(f"备用方法成功保存: {filename}")
+                return True
+        except:
+            pass
+        
+        # 策略2：尝试使用requests的原始方法
+        print("策略2: 使用原始requests方法...")
+        try:
+            response = requests.get(url, timeout=30, headers=alternative_headers)
+            if response.status_code == 200:
+                with open(filename, 'wb') as f:
+                    f.write(response.content)
+                print(f"原始方法成功保存: {filename}")
+                return True
+        except:
+            pass
+        
+        print("所有备用方法都失败了")
+        return False
+
     def save_covers(self, covers, book_title="活着", category=""):
         """
         保存中等尺寸的封面到分类文件夹
@@ -781,9 +844,10 @@ def main():
     # 创建获取器实例
     cover_getter = DoubanBookCover()
     
-    # 统计信息
+    # 初始化计数器
     success_count = 0
     failed_count = 0
+    failed_books = []  # 存储失败的书籍名称和原因
     
     # 逐一处理每本书
     for i, book_info in enumerate(books, 1):
@@ -815,10 +879,12 @@ def main():
             else:
                 print(f"✗ 未能获取到书籍封面信息: {book_title}")
                 failed_count += 1
+                failed_books.append(f"{book_title} - 未能获取到封面信息")
                 
         except Exception as e:
             print(f"✗ 处理书籍时出错: {book_title} - {e}")
             failed_count += 1
+            failed_books.append(f"{book_title} - 处理出错: {e}")
         
         # 添加延迟，避免请求过于频繁
         if i < len(books):
@@ -831,6 +897,14 @@ def main():
     print(f"成功处理: {success_count} 本书")
     print(f"处理失败: {failed_count} 本书")
     print(f"总计处理: {len(books)} 本书")
+    
+    # 显示失败的书籍名称
+    if failed_books:
+        print("\n失败的书籍列表:")
+        print("-" * 40)
+        for failed_book in failed_books:
+            print(f"• {failed_book}")
+        print("-" * 40)
 
 if __name__ == "__main__":
     main()
