@@ -18,6 +18,34 @@ class DoubanBookCover:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
+        self.request_count = 0  # 记录请求次数
+        self.last_request_time = time.time()  # 上次请求时间
+        self.base_delay = 2  # 基础延迟时间（秒）
+        self.max_delay = 30  # 最大延迟时间（秒）
+        self.request_interval = 3  # 请求间隔（秒）
+        
+    def _control_request_rate(self):
+        """
+        智能请求频率控制
+        """
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        
+        # 计算需要等待的时间
+        wait_time = max(0, self.request_interval - time_since_last)
+        
+        if wait_time > 0:
+            print(f"智能延迟: {wait_time:.1f}秒")
+            time.sleep(wait_time)
+        
+        # 更新请求信息
+        self.last_request_time = time.time()
+        self.request_count += 1
+        
+        # 每10次请求增加延迟时间
+        if self.request_count % 10 == 0:
+            self.request_interval = min(self.request_interval * 1.5, self.max_delay)
+            print(f"累计请求 {self.request_count} 次，调整请求间隔为 {self.request_interval:.1f}秒")
         
     def search_book(self, book_title):
         """
@@ -33,16 +61,43 @@ class DoubanBookCover:
                 # self._search_via_demo_data
             ]
             
-            for method in search_methods:
-                try:
-                    result = method(book_title)
-                    if result:
-                        print('========================================')
-                        print(result)
-                        return result
-                except Exception as e:
-                    print(f"搜索方法失败: {e}")
-                    continue
+            # 控制请求频率
+            self._control_request_rate()
+            
+            max_retries = 3  # 最大重试次数
+            retry_count = 0
+            
+            while retry_count < max_retries:
+                for method in search_methods:
+                    try:
+                        result = method(book_title)
+                        if result:
+                            print('========================================')
+                            print(result)
+                            return result
+                    except requests.RequestException as e:
+                        status_code = getattr(e.response, 'status_code', None)
+                        
+                        if status_code in [429, 418, 503]:
+                            # 频率限制或反爬虫错误
+                            retry_count += 1
+                            if retry_count >= max_retries:
+                                print(f"搜索方法失败（达到最大重试次数）: {e}")
+                                break
+                            
+                            # 指数退避策略
+                            backoff_time = min(2 ** retry_count, self.max_delay)
+                            print(f"遇到频率限制，{backoff_time}秒后重试 ({retry_count}/{max_retries})...")
+                            time.sleep(backoff_time)
+                            # 增加请求间隔
+                            self.request_interval = min(self.request_interval * 2, self.max_delay)
+                        else:
+                            print(f"搜索方法失败: {e}")
+                    except Exception as e:
+                        print(f"搜索方法失败: {e}")
+                else:
+                    # 所有方法都尝试失败
+                    break
             
             print(f"所有搜索方法都未找到书籍: {book_title}")
             return None
@@ -194,6 +249,9 @@ class DoubanBookCover:
         try:
             search_url = f"https://www.douban.com/search?cat=1001&q={quote(book_title)}"
             print(f"正在搜索豆瓣读书: {search_url}")
+            
+            # 控制请求频率
+            self._control_request_rate()
             
             response = self.session.get(search_url, timeout=10)
             response.raise_for_status()
